@@ -2,11 +2,14 @@
 #include <iostream>
 #include <fstream>
 using namespace std;
-
 int main(int argc, char *argv[])
 {
+    // Flush after every cout / cerr
     cout << unitbuf;
     cerr << unitbuf;
+
+    // You can use print statements as follows for debugging, they'll be visible when running tests.
+    cerr << "Logs from your program will appear here" << endl;
 
     if (argc != 3)
     {
@@ -26,13 +29,13 @@ int main(int argc, char *argv[])
             return 1;
         }
 
-        database_file.seekg(16);
+        database_file.seekg(16); // Skip the first 16 bytes of the header
 
         char buffer[2];
         database_file.read(buffer, 2);
 
         unsigned short page_size = (static_cast<unsigned char>(buffer[1]) | (static_cast<unsigned char>(buffer[0]) << 8));
-        database_file.seekg(103);
+        database_file.seekg(103); // skipping 100 bytes of header(since page1) and number of cells at offset 3
         char cntcells[2];
         database_file.read(cntcells, 2);
         unsigned short cell_cnt = (static_cast<unsigned char>(cntcells[1]) | (static_cast<unsigned char>(cntcells[0]) << 8));
@@ -47,77 +50,32 @@ int main(int argc, char *argv[])
             cerr << "Failed to open the database file" << endl;
             return 1;
         }
-
         database_file.seekg(103);
         char cntcells[2];
         database_file.read(cntcells, 2);
         unsigned short cell_cnt = (static_cast<unsigned char>(cntcells[1]) | (static_cast<unsigned char>(cntcells[0]) << 8));
-
         database_file.seekg(108);
-        unsigned short *cellpos = new unsigned short[cell_cnt];
+        char cellpos[cell_cnt];
         for (int i = 0; i < cell_cnt; i++)
         {
             char ptr[2];
             database_file.read(ptr, 2);
             cellpos[i] = ((static_cast<unsigned char>(ptr[1]) | (static_cast<unsigned char>(ptr[0]) << 8)));
         }
-
-        auto read_varint = [&database_file](int64_t &value) -> int
-        {
-            value = 0;
-            int bytes_read = 0;
-            char b;
-            do
-            {
-                database_file.read(&b, 1);
-                bytes_read++;
-                unsigned char ub = static_cast<unsigned char>(b);
-                if (bytes_read == 9)
-                {
-                    value = (value << 8) | ub;
-                    break;
-                }
-                value = (value << 7) | (ub & 0x7F);
-                if (!(ub & 0x80))
-                    break;
-            } while (true);
-            return bytes_read;
-        };
-
         for (int i = 0; i < cell_cnt; i++)
         {
-            database_file.seekg(cellpos[i]);
-
-            int64_t payload_size = 0;
-            int64_t row_id = 0;
-
-            read_varint(payload_size);
-            read_varint(row_id);
-
-            streampos record_header_start = database_file.tellg();
-            int64_t header_size = 0;
-            read_varint(header_size);
-
-            int64_t type_serial = 0;
-            int64_t name_serial = 0;
-            read_varint(type_serial);
-            read_varint(name_serial);
-
-            int type_len = (type_serial >= 13 && type_serial % 2 != 0) ? (type_serial - 13) / 2 : 0;
-            int name_len = (name_serial >= 13 && name_serial % 2 != 0) ? (name_serial - 13) / 2 : 0;
-
-            database_file.seekg(record_header_start + (streamoff)header_size);
-            database_file.seekg(type_len, ios::cur);
-
+            database_file.seekg(cellpos[i] + 5);
+            char name_len_byte;
+            database_file.read(&name_len_byte, 1);
+            int name_len = (static_cast<unsigned char>(name_len_byte) - 13) / 2;
+            database_file.seekg(cellpos[i] + 12);
+            database_file.seekg(5, ios::cur);
             char *table_name = new char[name_len + 1];
             database_file.read(table_name, name_len);
             table_name[name_len] = '\0';
-
             cout << table_name << " ";
-            delete[] table_name;
         }
         cout << endl;
-        delete[] cellpos;
     }
 
     return 0;
