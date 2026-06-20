@@ -38,7 +38,7 @@ int main(int argc, char *argv[])
         database_file.seekg(103); // skipping 100 bytes of header(since page1) and number of cells at offset 3
         char cntcells[2];
         database_file.read(cntcells, 2);
-        unsigned short cell_cnt = (static_cast<unsigned char>(cntcells[1]) | (static_cast<unsigned char>(cntcells[1]) << 8));
+        unsigned short cell_cnt = (static_cast<unsigned char>(cntcells[1]) | (static_cast<unsigned char>(cntcells[0]) << 8));
         cout << "database page size: " << page_size << endl;
         cout << "number of tables: " << cell_cnt << endl;
     }
