@@ -1,31 +1,31 @@
 #include <cstring>
 #include <iostream>
 #include <fstream>
-
+using namespace std;
 int main(int argc, char *argv[])
 {
-    // Flush after every std::cout / std::cerr
-    std::cout << std::unitbuf;
-    std::cerr << std::unitbuf;
+    // Flush after every cout / cerr
+    cout << unitbuf;
+    cerr << unitbuf;
 
     // You can use print statements as follows for debugging, they'll be visible when running tests.
-    std::cerr << "Logs from your program will appear here" << std::endl;
+    cerr << "Logs from your program will appear here" << endl;
 
     if (argc != 3)
     {
-        std::cerr << "Expected two arguments" << std::endl;
+        cerr << "Expected two arguments" << endl;
         return 1;
     }
 
-    std::string database_file_path = argv[1];
-    std::string command = argv[2];
+    string database_file_path = argv[1];
+    string command = argv[2];
 
     if (command == ".dbinfo")
     {
-        std::ifstream database_file(database_file_path, std::ios::binary);
+        ifstream database_file(database_file_path, ios::binary);
         if (!database_file)
         {
-            std::cerr << "Failed to open the database file" << std::endl;
+            cerr << "Failed to open the database file" << endl;
             return 1;
         }
 
@@ -35,8 +35,11 @@ int main(int argc, char *argv[])
         database_file.read(buffer, 2);
 
         unsigned short page_size = (static_cast<unsigned char>(buffer[1]) | (static_cast<unsigned char>(buffer[0]) << 8));
-
-        std::cout << "database page size: " << page_size << std::endl;
+        database_file.seekg(103); // skipping 100 bytes of header(since page1) and number of cells at offset 3
+        char cntcells[2];
+        unsigned short cell_cnt = (static_cast<unsigned char>(cntcells[1]) | (static_cast<unsigned char>(cntcells[1]) << 8));
+        cout << "database page size: " << page_size << endl;
+        cout << "number of tables: " << cell_cnt << endl;
     }
 
     return 0;
