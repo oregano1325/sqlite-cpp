@@ -93,19 +93,19 @@ int main(int argc, char *argv[])
             read_varint(database_file, payload_size);
             read_varint(database_file, row_id);
 
-            streampos record_header_start = database_file.tellg();
-            int64_t header_size = 0;
-            read_varint(database_file, header_size);
+            streampos st = database_file.tellg();
+            int64_t sz = 0;
+            read_varint(database_file, sz);
 
-            int64_t type_serial = 0;
-            int64_t name_serial = 0;
-            read_varint(database_file, type_serial);
-            read_varint(database_file, name_serial);
+            int64_t type = 0;
+            int64_t name = 0;
+            read_varint(database_file, type);
+            read_varint(database_file, type);
 
-            int type_len = (type_serial >= 13 && type_serial % 2 != 0) ? (type_serial - 13) / 2 : 0;
-            int name_len = (name_serial >= 13 && name_serial % 2 != 0) ? (name_serial - 13) / 2 : 0;
+            int type_len = (type >= 13 && name % 2 != 0) ? (type - 13) / 2 : 0;
+            int name_len = (name >= 13 && name % 2 != 0) ? (name - 13) / 2 : 0;
 
-            database_file.seekg(record_header_start + (streamoff)header_size);
+            database_file.seekg(st + (streamoff)sz);
             database_file.seekg(type_len, ios::cur);
 
             char *table_name = new char[name_len + 1];
