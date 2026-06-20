@@ -100,7 +100,7 @@ int main(int argc, char *argv[])
             int64_t type = 0;
             int64_t name = 0;
             read_varint(database_file, type);
-            read_varint(database_file, type);
+            read_varint(database_file, name);
 
             int type_len = (type >= 13 && name % 2 != 0) ? (type - 13) / 2 : 0;
             int name_len = (name >= 13 && name % 2 != 0) ? (name - 13) / 2 : 0;
