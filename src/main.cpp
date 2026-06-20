@@ -42,6 +42,41 @@ int main(int argc, char *argv[])
         cout << "database page size: " << page_size << endl;
         cout << "number of tables: " << cell_cnt << endl;
     }
+    else if (command == ".tables")
+    {
+        ifstream database_file(database_file_path, ios::binary);
+        if (!database_file)
+        {
+            cerr << "Failed to open the database file" << endl;
+            return 1;
+        }
+        database_file.seekg(103);
+        char cntcells[2];
+        database_file.read(cntcells, 2);
+        unsigned short cell_cnt = (static_cast<unsigned char>(cntcells[1]) | (static_cast<unsigned char>(cntcells[0]) << 8));
+        database_file.seekg(108);
+        char cellpos[cell_cnt];
+        for (int i = 0; i < cell_cnt; i++)
+        {
+            char ptr[2];
+            database_file.read(ptr, 2);
+            cellpos[i] = ((static_cast<unsigned char>(ptr[1]) | (static_cast<unsigned char>(ptr[0]) << 8)));
+        }
+        for (int i = 0; i < cell_cnt; i++)
+        {
+            database_file.seekg(cellpos[i] + 5);
+            char name_len_byte;
+            database_file.read(&name_len_byte, 1);
+            int name_len = (static_cast<unsigned char>(name_len_byte) - 13) / 2;
+            database_file.seekg(cellpos[i] + 12);
+            database_file.seekg(5, ios::cur);
+            char *table_name = new char[name_len + 1];
+            database_file.read(table_name, name_len);
+            table_name[name_len] = '\0';
+            cout << table_name << " ";
+        }
+        cout << endl;
+    }
 
     return 0;
 }
