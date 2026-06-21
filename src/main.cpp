@@ -3,6 +3,7 @@
 #include <fstream>
 #include <vector>
 #include <string>
+#include <sstream>
 
 using namespace std;
 
@@ -27,7 +28,6 @@ int read_varint(ifstream &database_file, int64_t &value)
     }
     return bytes_read;
 }
-#include <sstream>
 
 vector<string> parse_columns_from_sql(const string &sql_statement)
 {
@@ -67,6 +67,7 @@ vector<string> parse_columns_from_sql(const string &sql_statement)
     }
     return column_names;
 }
+
 int main(int argc, char *argv[])
 {
     cout << unitbuf;
@@ -257,96 +258,97 @@ int main(int argc, char *argv[])
                 database_file.read(cnt_buf, 2);
                 unsigned short row_count = (static_cast<unsigned char>(cnt_buf[1]) | (static_cast<unsigned char>(cnt_buf[0]) << 8));
                 cout << row_count << endl;
+
+                // Rest of the data block logic moved here inside the matching target check blocks
+                database_file.seekg(sql_serial);
+                int sql_len = (sql_serial >= 13 && sql_serial % 2) ? (sql_serial - 13) / 2 : 0;
+                string sql_text(sql_len, ' ');
+                database_file.read(&sql_text[0], sql_len);
+                sql_text[sql_len] = '\0';
+
+                vector<string> columns = parse_columns_from_sql(sql_text);
+                string target_column = "name"; // Match actual lowercase string fields
+                int target_col_idx = -1;
+                for (size_t c = 0; c < columns.size(); c++)
+                {
+                    if (columns[c] == target_column)
+                    {
+                        target_col_idx = c;
+                        break;
+                    }
+                }
+
+                streamoff data_page_offset = (target_root_page - 1) * (streamoff)page_size;
+
+                database_file.seekg(data_page_offset + 3);
+                char leaf_cnt_buf[2];
+                database_file.read(leaf_cnt_buf, 2);
+                unsigned short data_cell_cnt = (static_cast<unsigned char>(leaf_cnt_buf[1]) | (static_cast<unsigned char>(leaf_cnt_buf[0]) << 8));
+
+                database_file.seekg(data_page_offset + 8);
+                vector<unsigned short> data_cellpos(data_cell_cnt);
+                for (int i = 0; i < data_cell_cnt; i++)
+                {
+                    char ptr[2];
+                    database_file.read(ptr, 2);
+                    data_cellpos[i] = (static_cast<unsigned char>(ptr[1]) | (static_cast<unsigned char>(ptr[0]) << 8));
+                }
+
+                for (int i = 0; i < data_cell_cnt; i++)
+                {
+                    database_file.seekg(data_page_offset + data_cellpos[i]);
+
+                    int64_t payload_size = 0;
+                    int64_t row_id = 0;
+                    read_varint(database_file, payload_size);
+                    read_varint(database_file, row_id);
+
+                    streampos payload_start = database_file.tellg();
+                    int64_t header_sz = 0;
+                    read_varint(database_file, header_sz);
+
+                    vector<int64_t> serial_types;
+                    streampos current_pos = database_file.tellg();
+
+                    while (current_pos < payload_start + (streamoff)header_sz)
+                    {
+                        int64_t stype = 0;
+                        read_varint(database_file, stype);
+                        serial_types.push_back(stype);
+                        current_pos = database_file.tellg();
+                    }
+
+                    database_file.seekg(payload_start + (streamoff)header_sz);
+
+                    for (int col = 0; col < target_col_idx; col++)
+                    {
+                        int64_t stype = serial_types[col];
+                        int len = 0;
+                        if (stype >= 13 && stype % 2 != 0)
+                            len = (stype - 13) / 2;
+                        else if (stype == 1)
+                            len = 1;
+                        else if (stype == 2)
+                            len = 2;
+                        else if (stype == 4)
+                            len = 4;
+
+                        database_file.seekg(len, ios::cur);
+                    }
+
+                    int64_t target_stype = serial_types[target_col_idx];
+                    if (target_stype >= 13 && target_stype % 2 != 0)
+                    {
+                        int string_len = (target_stype - 13) / 2;
+                        char *col_val = new char[string_len + 1];
+                        database_file.read(col_val, string_len);
+                        col_val[string_len] = '\0';
+
+                        cout << col_val << endl;
+                        delete[] col_val;
+                    }
+                }
                 break;
-            }
-
-            database_file.seekg(sql_serial);
-            int sql_len = (sql_serial >= 13 && sql_serial % 2) ? (sql_serial - 13) / 2 : 0;
-            string sql_text(sql_len, ' ');
-            database_file.read(&sql_text[0], sql_len);
-            sql_text[sql_len] = '\0';
-
-            vector<string> columns = parse_columns_from_sql(sql_text);
-            string target_column = "NAME";
-            int target_col_idx = -1;
-            for (size_t c = 0; c < columns.size(); c++)
-            {
-                if (columns[c] == target_column)
-                {
-                    target_col_idx = c;
-                    break;
-                }
-            }
-
-            streamoff data_page_offset = (target_root_page - 1) * (streamoff)page_size;
-
-            database_file.seekg(data_page_offset + 3);
-            char leaf_cnt_buf[2];
-            database_file.read(leaf_cnt_buf, 2);
-            unsigned short data_cell_cnt = (static_cast<unsigned char>(leaf_cnt_buf[1]) | (static_cast<unsigned char>(leaf_cnt_buf[0]) << 8));
-
-            database_file.seekg(data_page_offset + 8);
-            vector<unsigned short> data_cellpos(data_cell_cnt);
-            for (int i = 0; i < data_cell_cnt; i++)
-            {
-                char ptr[2];
-                database_file.read(ptr, 2);
-                data_cellpos[i] = (static_cast<unsigned char>(ptr[1]) | (static_cast<unsigned char>(ptr[0]) << 8));
-            }
-
-            for (int i = 0; i < data_cell_cnt; i++)
-            {
-                database_file.seekg(data_page_offset + data_cellpos[i]);
-
-                int64_t payload_size = 0;
-                int64_t row_id = 0;
-                read_varint(database_file, payload_size);
-                read_varint(database_file, row_id);
-
-                streampos payload_start = database_file.tellg();
-                int64_t header_sz = 0;
-                read_varint(database_file, header_sz);
-
-                vector<int64_t> serial_types;
-                streampos current_pos = database_file.tellg();
-
-                while (current_pos < payload_start + (streamoff)header_sz)
-                {
-                    int64_t stype = 0;
-                    read_varint(database_file, stype);
-                    serial_types.push_back(stype);
-                    current_pos = database_file.tellg();
-                }
-
-                database_file.seekg(payload_start + (streamoff)header_sz);
-
-                for (int col = 0; col < target_col_idx; col++)
-                {
-                    int64_t stype = serial_types[col];
-                    int len = 0;
-                    if (stype >= 13 && stype % 2 != 0)
-                        len = (stype - 13) / 2;
-                    else if (stype == 1)
-                        len = 1;
-                    else if (stype == 2)
-                        len = 2;
-                    else if (stype == 4)
-                        len = 4;
-
-                    database_file.seekg(len, ios::cur);
-                }
-
-                int64_t target_stype = serial_types[target_col_idx];
-                if (target_stype >= 13 && target_stype % 2 != 0)
-                {
-                    int string_len = (target_stype - 13) / 2;
-                    char *col_val = new char[string_len + 1];
-                    database_file.read(col_val, string_len);
-                    col_val[string_len] = '\0';
-
-                    cout << col_val << endl;
-                    delete[] col_val;
-                }
             }
         }
     }
