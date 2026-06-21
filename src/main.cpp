@@ -27,7 +27,46 @@ int read_varint(ifstream &database_file, int64_t &value)
     }
     return bytes_read;
 }
+#include <sstream>
 
+vector<string> parse_columns_from_sql(const string &sql_statement)
+{
+    vector<string> column_names;
+
+    // 1. Find the opening parenthesis containing column definitions
+    size_t start = sql_statement.find('(');
+    size_t end = sql_statement.find_last_of(')');
+    if (start == string::npos || end == string::npos)
+        return column_names;
+
+    // Extract everything between the outer parentheses
+    string defs = sql_statement.substr(start + 1, end - start - 1);
+    stringstream ss(defs);
+    string column_def;
+
+    // 2. Split the schema string by commas to isolate each column block
+    while (getline(ss, column_def, ','))
+    {
+        // Trim leading spaces from the definition group
+        size_t first_non_space = column_def.find_first_not_of(" \t\n\r");
+        if (first_non_space != string::npos)
+        {
+            column_def = column_def.substr(first_non_space);
+        }
+
+        // The column name is the very first word before the data type space
+        size_t space_pos = column_def.find_first_of(" \t");
+        if (space_pos != string::npos)
+        {
+            column_names.push_back(column_def.substr(0, space_pos));
+        }
+        else if (!column_def.empty())
+        {
+            column_names.push_back(column_def); // fallback if no type is explicitly given
+        }
+    }
+    return column_names;
+}
 int main(int argc, char *argv[])
 {
     cout << unitbuf;
