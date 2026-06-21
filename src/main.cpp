@@ -303,29 +303,35 @@ int main(int argc, char *argv[])
                     }
                 }
 
-                // 2. Locate the column matching (case-insensitive)
-                int target_col_idx = -1;
-                for (size_t c = 0; c < columns.size(); c++)
-                {
-                    string col_lower = columns[c];
-                    for (char &ch : col_lower)
-                        ch = tolower(ch);
-                    string target_lower = target_column;
-                    for (char &ch : target_lower)
-                        ch = tolower(ch);
+                // Check if this is a COUNT(*) query
+                string target_lower = target_column;
+                for (char &ch : target_lower)
+                    ch = tolower(ch);
+                bool is_count_query = (target_lower == "count(*)");
 
-                    if (col_lower == target_lower)
+                // 2. Locate the column matching (case-insensitive) - skipped if it's COUNT(*)
+                int target_col_idx = -1;
+                if (!is_count_query)
+                {
+                    for (size_t c = 0; c < columns.size(); c++)
                     {
-                        target_col_idx = c;
+                        string col_lower = columns[c];
+                        for (char &ch : col_lower)
+                            ch = tolower(ch);
+
+                        if (col_lower == target_lower)
+                        {
+                            target_col_idx = c;
+                            break;
+                        }
+                    }
+
+                    // 3. SAFETY CHECK: If column wasn't found and it's not COUNT(*), stop early
+                    if (target_col_idx == -1)
+                    {
+                        cerr << "Error: Column '" << target_column << "' not found in table schema." << endl;
                         break;
                     }
-                }
-
-                // 3. SAFETY CHECK: If column wasn't found, stop early gracefully
-                if (target_col_idx == -1)
-                {
-                    cerr << "Error: Column '" << target_column << "' not found in table schema." << endl;
-                    break;
                 }
 
                 streamoff data_page_offset = (target_root_page - 1) * (streamoff)page_size;
@@ -344,6 +350,8 @@ int main(int argc, char *argv[])
                     data_cellpos[i] = (static_cast<unsigned char>(ptr[1]) | (static_cast<unsigned char>(ptr[0]) << 8));
                 }
 
+                int64_t total_rows_counted = 0;
+
                 for (int i = 0; i < data_cell_cnt; i++)
                 {
                     database_file.seekg(data_page_offset + data_cellpos[i]);
@@ -352,6 +360,13 @@ int main(int argc, char *argv[])
                     int64_t row_id = 0;
                     read_varint(database_file, payload_size);
                     read_varint(database_file, row_id);
+
+                    // If it's a count query, track the row presence and skip data decoding
+                    if (is_count_query)
+                    {
+                        total_rows_counted++;
+                        continue;
+                    }
 
                     streampos payload_start = database_file.tellg();
                     int64_t header_sz = 0;
@@ -402,6 +417,12 @@ int main(int argc, char *argv[])
                         cout << col_val << endl;
                         delete[] col_val;
                     }
+                }
+
+                // Output total row count only if it is a count aggregation select query
+                if (is_count_query)
+                {
+                    cout << total_rows_counted << endl;
                 }
                 break;
             }
