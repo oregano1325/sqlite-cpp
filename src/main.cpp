@@ -259,20 +259,19 @@ int main(int argc, char *argv[])
                 unsigned short row_count = (static_cast<unsigned char>(cnt_buf[1]) | (static_cast<unsigned char>(cnt_buf[0]) << 8));
                 cout << row_count << endl;
 
-                // Rest of the data block logic moved here inside the matching target check blocks
+                // Parse out SQL schema text string to extract columns
                 database_file.seekg(sql_serial);
                 int sql_len = (sql_serial >= 13 && sql_serial % 2) ? (sql_serial - 13) / 2 : 0;
                 string sql_text(sql_len, ' ');
                 database_file.read(&sql_text[0], sql_len);
-                sql_text[sql_len] = '\0';
 
                 vector<string> columns = parse_columns_from_sql(sql_text);
 
-                // 1. Clean and normalize the incoming command target column
+                // Extract incoming targeted argument column name dynamically
                 string target_column = "name";
                 if (command.rfind("SELECT ", 0) == 0 || command.find("select ") == 0)
                 {
-                    size_t select_pos = command.find_first_of("tT") + 1; // End of SELECT/select
+                    size_t select_pos = command.find_first_of("tT") + 1;
                     size_t from_pos = command.find(" FROM");
                     if (from_pos == string::npos)
                         from_pos = command.find(" from");
@@ -280,17 +279,15 @@ int main(int argc, char *argv[])
                     if (from_pos != string::npos)
                     {
                         target_column = command.substr(select_pos, from_pos - select_pos);
-                        // Trim whitespace
                         target_column.erase(0, target_column.find_first_not_of(" "));
                         target_column.erase(target_column.find_last_not_of(" ") + 1);
                     }
                 }
 
-                // 2. Locate the column matching (case-insensitive)
+                // Locate the targeted column name index matching schema layout
                 int target_col_idx = -1;
                 for (size_t c = 0; c < columns.size(); c++)
                 {
-                    // Basic case-insensitive comparison helper
                     string col_lower = columns[c];
                     for (char &ch : col_lower)
                         ch = tolower(ch);
@@ -305,8 +302,8 @@ int main(int argc, char *argv[])
                     }
                 }
 
-                // 3. SAFETY CHECK: If column wasn't found, skip querying cells to avoid vectors crashing
-                if (target_col_idx == -1 || target_col_idx >= (int)serial_types.size())
+                // If column name passed in argument cannot be resolved, stop gracefully
+                if (target_col_idx == -1)
                 {
                     cerr << "Error: Column '" << target_column << "' not found in table schema." << endl;
                     break;
@@ -328,6 +325,7 @@ int main(int argc, char *argv[])
                     data_cellpos[i] = (static_cast<unsigned char>(ptr[1]) | (static_cast<unsigned char>(ptr[0]) << 8));
                 }
 
+                // Now loop over data cells safely
                 for (int i = 0; i < data_cell_cnt; i++)
                 {
                     database_file.seekg(data_page_offset + data_cellpos[i]);
@@ -350,6 +348,12 @@ int main(int argc, char *argv[])
                         read_varint(database_file, stype);
                         serial_types.push_back(stype);
                         current_pos = database_file.tellg();
+                    }
+
+                    // SAFETY CHECK inside the data cell scope where serial_types is valid
+                    if (target_col_idx >= (int)serial_types.size())
+                    {
+                        continue;
                     }
 
                     database_file.seekg(payload_start + (streamoff)header_sz);
