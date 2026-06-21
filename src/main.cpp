@@ -1,14 +1,18 @@
 #include <cstring>
 #include <iostream>
 #include <fstream>
+#include <vector>
+#include <string>
+
 using namespace std;
 
+// Fixed: Correctly reads bytes from the stream instead of using an uninitialized variable
 int read_varint(ifstream &database_file, int64_t &value)
 {
     value = 0;
     int bytes_read = 0;
     char b;
-    do
+    while (database_file.read(&b, 1))
     {
         bytes_read++;
         unsigned char ub = static_cast<unsigned char>(b);
@@ -20,7 +24,7 @@ int read_varint(ifstream &database_file, int64_t &value)
         value = (value << 7) | (ub & 0x7F);
         if (!(ub & 0x80))
             break;
-    } while (true);
+    }
     return bytes_read;
 }
 
@@ -38,21 +42,21 @@ int main(int argc, char *argv[])
     string database_file_path = argv[1];
     string command = argv[2];
 
+    ifstream database_file(database_file_path, ios::binary);
+    if (!database_file)
+    {
+        cerr << "Failed to open the database file" << endl;
+        return 1;
+    }
+
+    // Extract database page size early from Page 1 header
+    database_file.seekg(16);
+    char buffer[2];
+    database_file.read(buffer, 2);
+    unsigned short page_size = (static_cast<unsigned char>(buffer[1]) | (static_cast<unsigned char>(buffer[0]) << 8));
+
     if (command == ".dbinfo")
     {
-        ifstream database_file(database_file_path, ios::binary);
-        if (!database_file)
-        {
-            cerr << "Failed to open the database file" << endl;
-            return 1;
-        }
-
-        database_file.seekg(16);
-
-        char buffer[2];
-        database_file.read(buffer, 2);
-
-        unsigned short page_size = (static_cast<unsigned char>(buffer[1]) | (static_cast<unsigned char>(buffer[0]) << 8));
         database_file.seekg(103);
         char cntcells[2];
         database_file.read(cntcells, 2);
@@ -62,20 +66,14 @@ int main(int argc, char *argv[])
     }
     else if (command == ".tables")
     {
-        ifstream database_file(database_file_path, ios::binary);
-        if (!database_file)
-        {
-            cerr << "Failed to open the database file" << endl;
-            return 1;
-        }
         database_file.seekg(103);
         char cntcells[2];
         database_file.read(cntcells, 2);
         unsigned short cell_cnt = (static_cast<unsigned char>(cntcells[1]) | (static_cast<unsigned char>(cntcells[0]) << 8));
         database_file.seekg(108);
 
-        // Safe pointer layout array allocation
-        unsigned short cellpos[cell_cnt];
+        // Using safe std::vector to avoid variable-length array (VLA) compiler flags
+        vector<unsigned short> cellpos(cell_cnt);
         for (int i = 0; i < cell_cnt; i++)
         {
             char ptr[2];
@@ -115,30 +113,41 @@ int main(int argc, char *argv[])
             delete[] table_name;
         }
         cout << endl;
-        delete[] cellpos; // Clean up memory
     }
     else
     {
-        ifstream database_file(database_file_path, ios::binary);
-        if (!database_file)
+        // Shortcut parser: command is an SQL query string like "SELECT COUNT(*) FROM apples"
+        string target_table = "";
+        size_t last_space = command.find_last_of(" ");
+        if (last_space != string::npos)
         {
-            cerr << "Failed to open the database file" << endl;
-            return 1;
+            target_table = command.substr(last_space + 1);
         }
+        else
+        {
+            target_table = command;
+        }
+
+        // Drop trailing semicolon if the test suite passes one
+        if (!target_table.empty() && target_table.back() == ';')
+        {
+            target_table.pop_back();
+        }
+
         database_file.seekg(103);
         char cntcells[2];
         database_file.read(cntcells, 2);
         unsigned short cell_cnt = (static_cast<unsigned char>(cntcells[1]) | (static_cast<unsigned char>(cntcells[0]) << 8));
         database_file.seekg(108);
 
-        // Safe pointer layout array allocation
-        unsigned short cellpos[cell_cnt];
+        vector<unsigned short> cellpos(cell_cnt);
         for (int i = 0; i < cell_cnt; i++)
         {
             char ptr[2];
             database_file.read(ptr, 2);
             cellpos[i] = ((static_cast<unsigned char>(ptr[1]) | (static_cast<unsigned char>(ptr[0]) << 8)));
         }
+
         for (int i = 0; i < cell_cnt; i++)
         {
             database_file.seekg(cellpos[i]);
@@ -151,9 +160,8 @@ int main(int argc, char *argv[])
 
             streampos st = database_file.tellg();
             int64_t sz = 0;
-            read_varint(database_file, sz); // Header size
+            read_varint(database_file, sz);
 
-            // We MUST read all 4 serial codes from the header sequentially
             int64_t type_serial = 0;
             int64_t name_serial = 0;
             int64_t tbl_name_serial = 0;
@@ -164,48 +172,40 @@ int main(int argc, char *argv[])
             read_varint(database_file, tbl_name_serial);
             read_varint(database_file, rootpage_serial);
 
-            // Calculate data lengths from serial codes
             int type_len = (type_serial >= 13 && type_serial % 2 != 0) ? (type_serial - 13) / 2 : 0;
             int name_len = (name_serial >= 13 && name_serial % 2 != 0) ? (name_serial - 13) / 2 : 0;
             int tbl_name_len = (tbl_name_serial >= 13 && tbl_name_serial % 2 != 0) ? (tbl_name_serial - 13) / 2 : 0;
 
-            // Jump past the header entirely to enter the Data Body
             database_file.seekg(st + (streamoff)sz);
-
-            // Skip column 0 (type)
             database_file.seekg(type_len, ios::cur);
 
-            // Read column 1 (name)
             char *table_name = new char[name_len + 1];
             database_file.read(table_name, name_len);
             table_name[name_len] = '\0';
             string current_table_name(table_name);
             delete[] table_name;
 
-            // Check if this is the table we are looking for (passed from command line)
             if (current_table_name == target_table)
             {
-                // Skip column 2 (tbl_name) to reach column 3 (rootpage)
                 database_file.seekg(tbl_name_len, ios::cur);
-
                 int64_t target_root_page = 0;
 
-                // Parse rootpage depending on its integer storage size
-                if (rootpage_serial == 1)
+                if (rootpage_serial == 0)
                 {
-                    // 1-byte signed integer
+                    target_root_page = 0;
+                }
+                else if (rootpage_serial == 1)
+                {
                     target_root_page = (signed char)database_file.get();
                 }
                 else if (rootpage_serial == 2)
                 {
-                    // 2-byte big-endian integer
                     char buf[2];
                     database_file.read(buf, 2);
                     target_root_page = (static_cast<unsigned char>(buf[1]) | (static_cast<unsigned char>(buf[0]) << 8));
                 }
                 else if (rootpage_serial == 4)
                 {
-                    // 4-byte big-endian integer
                     char buf[4];
                     database_file.read(buf, 4);
                     target_root_page = (static_cast<unsigned char>(buf[3]) |
@@ -213,23 +213,28 @@ int main(int argc, char *argv[])
                                         (static_cast<unsigned char>(buf[1]) << 16) |
                                         (static_cast<unsigned char>(buf[0]) << 24));
                 }
+                else if (rootpage_serial == 8 || rootpage_serial == 9)
+                {
+                    target_root_page = (rootpage_serial == 9) ? 1 : 0;
+                }
 
-                // --- STEP 4: Jump to that root page and read its row count ---
+                if (target_root_page <= 0)
+                {
+                    cerr << "Error: Invalid root page found for table " << target_table << endl;
+                    return 1;
+                }
+
                 streamoff root_page_offset = (target_root_page - 1) * (streamoff)page_size;
-
-                // Seek to offset 3 of our target leaf page to find its cell count
                 database_file.seekg(root_page_offset + 3);
 
                 char cnt_buf[2];
                 database_file.read(cnt_buf, 2);
                 unsigned short row_count = (static_cast<unsigned char>(cnt_buf[1]) | (static_cast<unsigned char>(cnt_buf[0]) << 8));
 
-                // Output exactly what CodeCrafters expects and terminate
                 cout << row_count << endl;
                 break;
             }
         }
     }
-
     return 0;
 }
