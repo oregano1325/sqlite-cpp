@@ -267,15 +267,49 @@ int main(int argc, char *argv[])
                 sql_text[sql_len] = '\0';
 
                 vector<string> columns = parse_columns_from_sql(sql_text);
-                string target_column = "name"; // Match actual lowercase string fields
+
+                // 1. Clean and normalize the incoming command target column
+                string target_column = "name";
+                if (command.rfind("SELECT ", 0) == 0 || command.find("select ") == 0)
+                {
+                    size_t select_pos = command.find_first_of("tT") + 1; // End of SELECT/select
+                    size_t from_pos = command.find(" FROM");
+                    if (from_pos == string::npos)
+                        from_pos = command.find(" from");
+
+                    if (from_pos != string::npos)
+                    {
+                        target_column = command.substr(select_pos, from_pos - select_pos);
+                        // Trim whitespace
+                        target_column.erase(0, target_column.find_first_not_of(" "));
+                        target_column.erase(target_column.find_last_not_of(" ") + 1);
+                    }
+                }
+
+                // 2. Locate the column matching (case-insensitive)
                 int target_col_idx = -1;
                 for (size_t c = 0; c < columns.size(); c++)
                 {
-                    if (columns[c] == target_column)
+                    // Basic case-insensitive comparison helper
+                    string col_lower = columns[c];
+                    for (char &ch : col_lower)
+                        ch = tolower(ch);
+                    string target_lower = target_column;
+                    for (char &ch : target_lower)
+                        ch = tolower(ch);
+
+                    if (col_lower == target_lower)
                     {
                         target_col_idx = c;
                         break;
                     }
+                }
+
+                // 3. SAFETY CHECK: If column wasn't found, skip querying cells to avoid vectors crashing
+                if (target_col_idx == -1 || target_col_idx >= (int)serial_types.size())
+                {
+                    cerr << "Error: Column '" << target_column << "' not found in table schema." << endl;
+                    break;
                 }
 
                 streamoff data_page_offset = (target_root_page - 1) * (streamoff)page_size;
