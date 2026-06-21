@@ -3,10 +3,7 @@
 #include <fstream>
 #include <vector>
 #include <string>
-
 using namespace std;
-
-// Fixed: Correctly reads bytes from the stream instead of using an uninitialized variable
 int read_varint(ifstream &database_file, int64_t &value)
 {
     value = 0;
@@ -48,13 +45,10 @@ int main(int argc, char *argv[])
         cerr << "Failed to open the database file" << endl;
         return 1;
     }
-
-    // Extract database page size early from Page 1 header
     database_file.seekg(16);
     char buffer[2];
     database_file.read(buffer, 2);
     unsigned short page_size = (static_cast<unsigned char>(buffer[1]) | (static_cast<unsigned char>(buffer[0]) << 8));
-
     if (command == ".dbinfo")
     {
         database_file.seekg(103);
@@ -71,8 +65,6 @@ int main(int argc, char *argv[])
         database_file.read(cntcells, 2);
         unsigned short cell_cnt = (static_cast<unsigned char>(cntcells[1]) | (static_cast<unsigned char>(cntcells[0]) << 8));
         database_file.seekg(108);
-
-        // Using safe std::vector to avoid variable-length array (VLA) compiler flags
         vector<unsigned short> cellpos(cell_cnt);
         for (int i = 0; i < cell_cnt; i++)
         {
@@ -116,7 +108,6 @@ int main(int argc, char *argv[])
     }
     else
     {
-        // Shortcut parser: command is an SQL query string like "SELECT COUNT(*) FROM apples"
         string target_table = "";
         size_t last_space = command.find_last_of(" ");
         if (last_space != string::npos)
@@ -127,13 +118,6 @@ int main(int argc, char *argv[])
         {
             target_table = command;
         }
-
-        // Drop trailing semicolon if the test suite passes one
-        if (!target_table.empty() && target_table.back() == ';')
-        {
-            target_table.pop_back();
-        }
-
         database_file.seekg(103);
         char cntcells[2];
         database_file.read(cntcells, 2);
