@@ -251,27 +251,45 @@ int main(int argc, char *argv[])
                     target_root_page = (rootpage_serial == 9) ? 1 : 0;
                 }
 
-                streamoff root_page_offset = (target_root_page - 1) * (streamoff)page_size;
-                database_file.seekg(root_page_offset + 3);
+                // Go back to the record payload space start
+                database_file.seekg(st + (streamoff)sz);
 
-                char cnt_buf[2];
-                database_file.read(cnt_buf, 2);
-                unsigned short row_count = (static_cast<unsigned char>(cnt_buf[1]) | (static_cast<unsigned char>(cnt_buf[0]) << 8));
-                cout << row_count << endl;
+                // Sequential payload seek skip logic to get to the SQL data string correctly
+                int len = (type_serial >= 13 && type_serial % 2 != 0) ? (type_serial - 13) / 2 : 0;
+                database_file.seekg(len, ios::cur);
 
-                // Parse out SQL schema text string to extract columns
-                database_file.seekg(sql_serial);
+                len = (name_serial >= 13 && name_serial % 2 != 0) ? (name_serial - 13) / 2 : 0;
+                database_file.seekg(len, ios::cur);
+
+                len = (tbl_name_serial >= 13 && tbl_name_serial % 2 != 0) ? (tbl_name_serial - 13) / 2 : 0;
+                database_file.seekg(len, ios::cur);
+
+                int root_len = 0;
+                if (rootpage_serial == 1)
+                    root_len = 1;
+                else if (rootpage_serial == 2)
+                    root_len = 2;
+                else if (rootpage_serial == 3)
+                    root_len = 3;
+                else if (rootpage_serial == 4)
+                    root_len = 4;
+                else if (rootpage_serial == 5)
+                    root_len = 6;
+                else if (rootpage_serial == 6)
+                    root_len = 8;
+                database_file.seekg(root_len, ios::cur);
+
                 int sql_len = (sql_serial >= 13 && sql_serial % 2) ? (sql_serial - 13) / 2 : 0;
                 string sql_text(sql_len, ' ');
                 database_file.read(&sql_text[0], sql_len);
 
                 vector<string> columns = parse_columns_from_sql(sql_text);
 
-                // Extract incoming targeted argument column name dynamically
+                // 1. Clean and normalize the incoming command target column
                 string target_column = "name";
                 if (command.rfind("SELECT ", 0) == 0 || command.find("select ") == 0)
                 {
-                    size_t select_pos = command.find_first_of("tT") + 1;
+                    size_t select_pos = command.find_first_of("tT") + 1; // End of SELECT/select
                     size_t from_pos = command.find(" FROM");
                     if (from_pos == string::npos)
                         from_pos = command.find(" from");
@@ -279,12 +297,13 @@ int main(int argc, char *argv[])
                     if (from_pos != string::npos)
                     {
                         target_column = command.substr(select_pos, from_pos - select_pos);
+                        // Trim whitespace
                         target_column.erase(0, target_column.find_first_not_of(" "));
                         target_column.erase(target_column.find_last_not_of(" ") + 1);
                     }
                 }
 
-                // Locate the targeted column name index matching schema layout
+                // 2. Locate the column matching (case-insensitive)
                 int target_col_idx = -1;
                 for (size_t c = 0; c < columns.size(); c++)
                 {
@@ -302,7 +321,7 @@ int main(int argc, char *argv[])
                     }
                 }
 
-                // If column name passed in argument cannot be resolved, stop gracefully
+                // 3. SAFETY CHECK: If column wasn't found, stop early gracefully
                 if (target_col_idx == -1)
                 {
                     cerr << "Error: Column '" << target_column << "' not found in table schema." << endl;
@@ -325,7 +344,6 @@ int main(int argc, char *argv[])
                     data_cellpos[i] = (static_cast<unsigned char>(ptr[1]) | (static_cast<unsigned char>(ptr[0]) << 8));
                 }
 
-                // Now loop over data cells safely
                 for (int i = 0; i < data_cell_cnt; i++)
                 {
                     database_file.seekg(data_page_offset + data_cellpos[i]);
@@ -350,7 +368,6 @@ int main(int argc, char *argv[])
                         current_pos = database_file.tellg();
                     }
 
-                    // SAFETY CHECK inside the data cell scope where serial_types is valid
                     if (target_col_idx >= (int)serial_types.size())
                     {
                         continue;
@@ -361,17 +378,17 @@ int main(int argc, char *argv[])
                     for (int col = 0; col < target_col_idx; col++)
                     {
                         int64_t stype = serial_types[col];
-                        int len = 0;
+                        int data_len = 0;
                         if (stype >= 13 && stype % 2 != 0)
-                            len = (stype - 13) / 2;
+                            data_len = (stype - 13) / 2;
                         else if (stype == 1)
-                            len = 1;
+                            data_len = 1;
                         else if (stype == 2)
-                            len = 2;
+                            data_len = 2;
                         else if (stype == 4)
-                            len = 4;
+                            data_len = 4;
 
-                        database_file.seekg(len, ios::cur);
+                        database_file.seekg(data_len, ios::cur);
                     }
 
                     int64_t target_stype = serial_types[target_col_idx];
