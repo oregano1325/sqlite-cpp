@@ -7,7 +7,6 @@
 
 using namespace std;
 
-// Provided varint parser
 int read_varint(ifstream &database_file, int64_t &value)
 {
     value = 0;
@@ -33,28 +32,23 @@ vector<string> parse_columns_from_sql(const string &sql_statement)
 {
     vector<string> column_names;
 
-    // 1. Find the opening parenthesis containing column definitions
     size_t start = sql_statement.find('(');
     size_t end = sql_statement.find_last_of(')');
-    if (start == string::npos || end == string::npos)
+    if (start == string::npos or end == string::npos)
         return column_names;
 
-    // Extract everything between the outer parentheses
     string defs = sql_statement.substr(start + 1, end - start - 1);
     stringstream ss(defs);
     string column_def;
 
-    // 2. Split the schema string by commas to isolate each column block
     while (getline(ss, column_def, ','))
     {
-        // Trim leading spaces from the definition group
         size_t first_non_space = column_def.find_first_not_of(" \t\n\r");
         if (first_non_space != string::npos)
         {
             column_def = column_def.substr(first_non_space);
         }
 
-        // The column name is the very first word before the data type space
         size_t space_pos = column_def.find_first_of(" \t");
         if (space_pos != string::npos)
         {
@@ -62,7 +56,7 @@ vector<string> parse_columns_from_sql(const string &sql_statement)
         }
         else if (!column_def.empty())
         {
-            column_names.push_back(column_def); // fallback if no type is explicitly given
+            column_names.push_back(column_def);
         }
     }
     return column_names;
@@ -94,6 +88,7 @@ int main(int argc, char *argv[])
     database_file.read(buffer, 2);
     unsigned short page_size = (static_cast<unsigned char>(buffer[1]) | (static_cast<unsigned char>(buffer[0]) << 8));
 
+    // stage 1: reading basic db details
     if (command == ".dbinfo")
     {
         database_file.seekg(103);
@@ -103,6 +98,7 @@ int main(int argc, char *argv[])
         cout << "database page size: " << page_size << endl;
         cout << "number of tables: " << cell_cnt << endl;
     }
+    // stage 2: looking through schemas to list table names
     else if (command == ".tables")
     {
         database_file.seekg(103);
@@ -138,8 +134,8 @@ int main(int argc, char *argv[])
             read_varint(database_file, type);
             read_varint(database_file, name);
 
-            int type_len = (type >= 13 && type % 2 != 0) ? (type - 13) / 2 : 0;
-            int name_len = (name >= 13 && name % 2 != 0) ? (name - 13) / 2 : 0;
+            int type_len = (type >= 13 and type % 2 != 0) ? (type - 13) / 2 : 0;
+            int name_len = (name >= 13 and name % 2 != 0) ? (name - 13) / 2 : 0;
 
             database_file.seekg(st + (streamoff)sz);
             database_file.seekg(type_len, ios::cur);
@@ -152,6 +148,7 @@ int main(int argc, char *argv[])
         }
         cout << endl;
     }
+    // stages 3 and 4: parsing select statements for counting or scanning data columns
     else
     {
         string target_table = "";
@@ -205,9 +202,9 @@ int main(int argc, char *argv[])
             read_varint(database_file, rootpage_serial);
             read_varint(database_file, sql_serial);
 
-            int type_len = (type_serial >= 13 && type_serial % 2 != 0) ? (type_serial - 13) / 2 : 0;
-            int name_len = (name_serial >= 13 && name_serial % 2 != 0) ? (name_serial - 13) / 2 : 0;
-            int tbl_name_len = (tbl_name_serial >= 13 && tbl_name_serial % 2 != 0) ? (tbl_name_serial - 13) / 2 : 0;
+            int type_len = (type_serial >= 13 and type_serial % 2 != 0) ? (type_serial - 13) / 2 : 0;
+            int name_len = (name_serial >= 13 and name_serial % 2 != 0) ? (name_serial - 13) / 2 : 0;
+            int tbl_name_len = (tbl_name_serial >= 13 and tbl_name_serial % 2 != 0) ? (tbl_name_serial - 13) / 2 : 0;
 
             database_file.seekg(st + (streamoff)sz);
             database_file.seekg(type_len, ios::cur);
@@ -246,22 +243,20 @@ int main(int argc, char *argv[])
                                         (static_cast<unsigned char>(buf[1]) << 16) |
                                         (static_cast<unsigned char>(buf[0]) << 24));
                 }
-                else if (rootpage_serial == 8 || rootpage_serial == 9)
+                else if (rootpage_serial == 8 or rootpage_serial == 9)
                 {
                     target_root_page = (rootpage_serial == 9) ? 1 : 0;
                 }
 
-                // Go back to the record payload space start
                 database_file.seekg(st + (streamoff)sz);
 
-                // Sequential payload seek skip logic to get to the SQL data string correctly
-                int len = (type_serial >= 13 && type_serial % 2 != 0) ? (type_serial - 13) / 2 : 0;
+                int len = (type_serial >= 13 and type_serial % 2 != 0) ? (type_serial - 13) / 2 : 0;
                 database_file.seekg(len, ios::cur);
 
-                len = (name_serial >= 13 && name_serial % 2 != 0) ? (name_serial - 13) / 2 : 0;
+                len = (name_serial >= 13 and name_serial % 2 != 0) ? (name_serial - 13) / 2 : 0;
                 database_file.seekg(len, ios::cur);
 
-                len = (tbl_name_serial >= 13 && tbl_name_serial % 2 != 0) ? (tbl_name_serial - 13) / 2 : 0;
+                len = (tbl_name_serial >= 13 and tbl_name_serial % 2 != 0) ? (tbl_name_serial - 13) / 2 : 0;
                 database_file.seekg(len, ios::cur);
 
                 int root_len = 0;
@@ -279,17 +274,16 @@ int main(int argc, char *argv[])
                     root_len = 8;
                 database_file.seekg(root_len, ios::cur);
 
-                int sql_len = (sql_serial >= 13 && sql_serial % 2) ? (sql_serial - 13) / 2 : 0;
+                int sql_len = (sql_serial >= 13 and sql_serial % 2) ? (sql_serial - 13) / 2 : 0;
                 string sql_text(sql_len, ' ');
                 database_file.read(&sql_text[0], sql_len);
 
                 vector<string> columns = parse_columns_from_sql(sql_text);
 
-                // 1. Clean and normalize the incoming command target column
                 string target_column = "name";
-                if (command.rfind("SELECT ", 0) == 0 || command.find("select ") == 0)
+                if (command.rfind("SELECT ", 0) == 0 or command.find("select ") == 0)
                 {
-                    size_t select_pos = command.find_first_of("tT") + 1; // End of SELECT/select
+                    size_t select_pos = command.find_first_of("tT") + 1;
                     size_t from_pos = command.find(" FROM");
                     if (from_pos == string::npos)
                         from_pos = command.find(" from");
@@ -297,19 +291,16 @@ int main(int argc, char *argv[])
                     if (from_pos != string::npos)
                     {
                         target_column = command.substr(select_pos, from_pos - select_pos);
-                        // Trim whitespace
                         target_column.erase(0, target_column.find_first_not_of(" "));
                         target_column.erase(target_column.find_last_not_of(" ") + 1);
                     }
                 }
 
-                // Check if this is a COUNT(*) query
                 string target_lower = target_column;
                 for (char &ch : target_lower)
                     ch = tolower(ch);
                 bool is_count_query = (target_lower == "count(*)");
 
-                // 2. Locate the column matching (case-insensitive) - skipped if it's COUNT(*)
                 int target_col_idx = -1;
                 if (!is_count_query)
                 {
@@ -326,7 +317,6 @@ int main(int argc, char *argv[])
                         }
                     }
 
-                    // 3. SAFETY CHECK: If column wasn't found and it's not COUNT(*), stop early
                     if (target_col_idx == -1)
                     {
                         cerr << "Error: Column '" << target_column << "' not found in table schema." << endl;
@@ -361,7 +351,6 @@ int main(int argc, char *argv[])
                     read_varint(database_file, payload_size);
                     read_varint(database_file, row_id);
 
-                    // If it's a count query, track the row presence and skip data decoding
                     if (is_count_query)
                     {
                         total_rows_counted++;
@@ -394,7 +383,7 @@ int main(int argc, char *argv[])
                     {
                         int64_t stype = serial_types[col];
                         int data_len = 0;
-                        if (stype >= 13 && stype % 2 != 0)
+                        if (stype >= 13 and stype % 2 != 0)
                             data_len = (stype - 13) / 2;
                         else if (stype == 1)
                             data_len = 1;
@@ -407,7 +396,7 @@ int main(int argc, char *argv[])
                     }
 
                     int64_t target_stype = serial_types[target_col_idx];
-                    if (target_stype >= 13 && target_stype % 2 != 0)
+                    if (target_stype >= 13 and target_stype % 2 != 0)
                     {
                         int string_len = (target_stype - 13) / 2;
                         char *col_val = new char[string_len + 1];
@@ -419,7 +408,6 @@ int main(int argc, char *argv[])
                     }
                 }
 
-                // Output total row count only if it is a count aggregation select query
                 if (is_count_query)
                 {
                     cout << total_rows_counted << endl;
