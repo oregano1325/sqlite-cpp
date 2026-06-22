@@ -414,10 +414,10 @@ int main(int argc, char *argv[])
 
                 int64_t total_rows_counted = 0;
 
-                // --- NEW LOGIC: Ask our recursion map for all the leaf pages ---
+                // Ask our recursion map for all the leaf pages
                 vector<int> all_leaf_pages = get_leaf_pages(database_file, target_root_page, page_size);
 
-                // Now loop through every single leaf page we found
+                // Loop through every single leaf page we found
                 for (int current_leaf_page : all_leaf_pages)
                 {
 
@@ -491,6 +491,19 @@ int main(int argc, char *argv[])
                                 {
                                     database_file.seekg(data_len, ios::cur);
                                     row_values[col] = "[IntData]";
+                                }
+                            }
+
+                            // --- THE MAGIC FIX FOR ID ---
+                            if (col < table_columns.size())
+                            {
+                                string current_col_name = table_columns[col];
+                                transform(current_col_name.begin(), current_col_name.end(), current_col_name.begin(), ::tolower);
+
+                                // Check if this is the ID column and SQLite put a NULL/0 byte value here
+                                if (current_col_name == "id" && stype == 0)
+                                {
+                                    row_values[col] = to_string(row_id);
                                 }
                             }
                         }
