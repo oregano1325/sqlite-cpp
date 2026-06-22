@@ -718,6 +718,120 @@ int main(int argc, char *argv[])
                 }
             }
         }
+
+        else
+        {
+            // FALLBACK: Full Table Scan (for queries without WHERE clauses or unindexed columns)
+            int64_t total_rows_counted = 0;
+            vector<int> all_leaf_pages = get_leaf_pages(database_file, target_root_page, page_size);
+
+            for (int current_leaf_page : all_leaf_pages)
+            {
+                streamoff data_page_offset = (current_leaf_page - 1) * (streamoff)page_size;
+                database_file.seekg(data_page_offset + 3);
+                char leaf_cnt_buf[2];
+                database_file.read(leaf_cnt_buf, 2);
+                unsigned short data_cell_cnt = (static_cast<unsigned char>(leaf_cnt_buf[1]) | (static_cast<unsigned char>(leaf_cnt_buf[0]) << 8));
+
+                database_file.seekg(data_page_offset + 8);
+                vector<unsigned short> data_cellpos(data_cell_cnt);
+                for (int j = 0; j < data_cell_cnt; j++)
+                {
+                    char ptr[2];
+                    database_file.read(ptr, 2);
+                    data_cellpos[j] = (static_cast<unsigned char>(ptr[1]) | (static_cast<unsigned char>(ptr[0]) << 8));
+                }
+
+                for (int j = 0; j < data_cell_cnt; j++)
+                {
+                    database_file.seekg(data_page_offset + data_cellpos[j]);
+                    int64_t payload_size = 0, row_id = 0;
+                    read_varint(database_file, payload_size);
+                    read_varint(database_file, row_id);
+
+                    streampos payload_start = database_file.tellg();
+                    int64_t header_sz = 0;
+                    read_varint(database_file, header_sz);
+
+                    vector<int64_t> serial_types;
+                    streampos current_pos = database_file.tellg();
+                    while (current_pos < payload_start + (streamoff)header_sz)
+                    {
+                        int64_t stype = 0;
+                        read_varint(database_file, stype);
+                        serial_types.push_back(stype);
+                        current_pos = database_file.tellg();
+                    }
+
+                    database_file.seekg(payload_start + (streamoff)header_sz);
+                    vector<string> row_values(serial_types.size(), "");
+                    for (size_t col = 0; col < serial_types.size(); col++)
+                    {
+                        int64_t stype = serial_types[col];
+                        int data_len = 0;
+                        if (stype >= 13 and stype % 2 != 0)
+                            data_len = (stype - 13) / 2;
+                        else if (stype == 1)
+                            data_len = 1;
+                        else if (stype == 2)
+                            data_len = 2;
+                        else if (stype == 4)
+                            data_len = 4;
+
+                        if (data_len > 0)
+                        {
+                            if (stype >= 13 and stype % 2 != 0)
+                            {
+                                char *col_val = new char[data_len + 1];
+                                database_file.read(col_val, data_len);
+                                col_val[data_len] = '\0';
+                                row_values[col] = string(col_val);
+                                delete[] col_val;
+                            }
+                            else
+                            {
+                                database_file.seekg(data_len, ios::cur);
+                                row_values[col] = "[IntData]";
+                            }
+                        }
+                        if (col < table_columns.size())
+                        {
+                            string current_col_name = table_columns[col];
+                            transform(current_col_name.begin(), current_col_name.end(), current_col_name.begin(), ::tolower);
+                            if (current_col_name == "id" && stype == 0)
+                                row_values[col] = to_string(row_id);
+                        }
+                    }
+
+                    if (has_where && where_col_idx != -1)
+                    {
+                        if (row_values[where_col_idx] != where_val)
+                            continue;
+                    }
+
+                    if (is_count_query)
+                    {
+                        total_rows_counted++;
+                        continue;
+                    }
+
+                    string output_line = "";
+                    for (size_t k = 0; k < target_col_indices.size(); k++)
+                    {
+                        int mapped_idx = target_col_indices[k];
+                        if (mapped_idx != -1 && mapped_idx < (int)row_values.size())
+                        {
+                            output_line += row_values[mapped_idx];
+                        }
+                        if (k < target_col_indices.size() - 1)
+                            output_line += "|";
+                    }
+                    cout << output_line << endl;
+                }
+            }
+            if (is_count_query)
+                cout << total_rows_counted << endl;
+        }
     }
     return 0;
 }
