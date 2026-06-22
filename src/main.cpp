@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <sstream>
+#include <algorithm>
 
 using namespace std;
 
@@ -62,6 +63,16 @@ vector<string> parse_columns_from_sql(const string &sql_statement)
     return column_names;
 }
 
+// Helper tool to trim spaces
+string trim(const string &str)
+{
+    size_t first = str.find_first_not_of(" \t\n\r");
+    if (first == string::npos)
+        return "";
+    size_t last = str.find_last_not_of(" \t\n\r");
+    return str.substr(first, (last - first + 1));
+}
+
 int main(int argc, char *argv[])
 {
     cout << unitbuf;
@@ -88,7 +99,6 @@ int main(int argc, char *argv[])
     database_file.read(buffer, 2);
     unsigned short page_size = (static_cast<unsigned char>(buffer[1]) | (static_cast<unsigned char>(buffer[0]) << 8));
 
-    // stage 1: reading basic db details
     if (command == ".dbinfo")
     {
         database_file.seekg(103);
@@ -98,7 +108,6 @@ int main(int argc, char *argv[])
         cout << "database page size: " << page_size << endl;
         cout << "number of tables: " << cell_cnt << endl;
     }
-    // stage 2: looking through schemas to list table names
     else if (command == ".tables")
     {
         database_file.seekg(103);
@@ -148,19 +157,15 @@ int main(int argc, char *argv[])
         }
         cout << endl;
     }
-    // stages 3 and 4: parsing select statements for counting or scanning data columns
     else
     {
+        // Parse table name out of command
         string target_table = "";
         size_t last_space = command.find_last_of(" ");
         if (last_space != string::npos)
-        {
             target_table = command.substr(last_space + 1);
-        }
         else
-        {
             target_table = command;
-        }
 
         database_file.seekg(103);
         char cntcells[2];
@@ -221,13 +226,9 @@ int main(int argc, char *argv[])
                 int64_t target_root_page = 0;
 
                 if (rootpage_serial == 0)
-                {
-                    target_root_page = 0;
-                }
+                    rootpage_serial = 0;
                 else if (rootpage_serial == 1)
-                {
                     target_root_page = (signed char)database_file.get();
-                }
                 else if (rootpage_serial == 2)
                 {
                     char buf[2];
@@ -243,89 +244,73 @@ int main(int argc, char *argv[])
                                         (static_cast<unsigned char>(buf[1]) << 16) |
                                         (static_cast<unsigned char>(buf[0]) << 24));
                 }
-                else if (rootpage_serial == 8 or rootpage_serial == 9)
-                {
-                    target_root_page = (rootpage_serial == 9) ? 1 : 0;
-                }
 
                 database_file.seekg(st + (streamoff)sz);
+                database_file.seekg(type_len + name_len + tbl_name_len, ios::cur);
 
-                int len = (type_serial >= 13 and type_serial % 2 != 0) ? (type_serial - 13) / 2 : 0;
-                database_file.seekg(len, ios::cur);
-
-                len = (name_serial >= 13 and name_serial % 2 != 0) ? (name_serial - 13) / 2 : 0;
-                database_file.seekg(len, ios::cur);
-
-                len = (tbl_name_serial >= 13 and tbl_name_serial % 2 != 0) ? (tbl_name_serial - 13) / 2 : 0;
-                database_file.seekg(len, ios::cur);
-
-                int root_len = 0;
-                if (rootpage_serial == 1)
-                    root_len = 1;
-                else if (rootpage_serial == 2)
-                    root_len = 2;
-                else if (rootpage_serial == 3)
-                    root_len = 3;
-                else if (rootpage_serial == 4)
-                    root_len = 4;
-                else if (rootpage_serial == 5)
-                    root_len = 6;
-                else if (rootpage_serial == 6)
-                    root_len = 8;
+                int root_len = (rootpage_serial <= 4) ? rootpage_serial : 0;
                 database_file.seekg(root_len, ios::cur);
 
                 int sql_len = (sql_serial >= 13 and sql_serial % 2) ? (sql_serial - 13) / 2 : 0;
                 string sql_text(sql_len, ' ');
                 database_file.read(&sql_text[0], sql_len);
 
-                vector<string> columns = parse_columns_from_sql(sql_text);
+                vector<string> table_columns = parse_columns_from_sql(sql_text);
 
-                string target_column = "name";
-                if (command.rfind("SELECT ", 0) == 0 or command.find("select ") == 0)
+                // Parse out multiple columns from SELECT statement
+                vector<string> target_columns;
+                bool is_count_query = false;
+
+                if (command.rfind("SELECT ", 0) == 0 || command.rfind("select ", 0) == 0)
                 {
-                    size_t select_pos = command.find_first_of("tT") + 1;
+                    size_t select_pos = 7; // Length of "SELECT "
                     size_t from_pos = command.find(" FROM");
                     if (from_pos == string::npos)
                         from_pos = command.find(" from");
 
                     if (from_pos != string::npos)
                     {
-                        target_column = command.substr(select_pos, from_pos - select_pos);
-                        target_column.erase(0, target_column.find_first_not_of(" "));
-                        target_column.erase(target_column.find_last_not_of(" ") + 1);
+                        string col_part = command.substr(select_pos, from_pos - select_pos);
+                        stringstream col_ss(col_part);
+                        string col_name;
+                        while (getline(col_ss, col_name, ','))
+                        {
+                            string cleaned = trim(col_name);
+                            string lower_cleaned = cleaned;
+                            transform(lower_cleaned.begin(), lower_cleaned.end(), lower_cleaned.begin(), ::tolower);
+
+                            if (lower_cleaned == "count(*)")
+                            {
+                                is_count_query = true;
+                                break;
+                            }
+                            target_columns.push_back(lower_cleaned);
+                        }
                     }
                 }
 
-                string target_lower = target_column;
-                for (char &ch : target_lower)
-                    ch = tolower(ch);
-                bool is_count_query = (target_lower == "count(*)");
-
-                int target_col_idx = -1;
+                // Map requested columns to schema indexes
+                vector<int> target_col_indices;
                 if (!is_count_query)
                 {
-                    for (size_t c = 0; c < columns.size(); c++)
+                    for (const auto &t_col : target_columns)
                     {
-                        string col_lower = columns[c];
-                        for (char &ch : col_lower)
-                            ch = tolower(ch);
-
-                        if (col_lower == target_lower)
+                        int idx = -1;
+                        for (size_t c = 0; c < table_columns.size(); c++)
                         {
-                            target_col_idx = c;
-                            break;
+                            string col_lower = table_columns[c];
+                            transform(col_lower.begin(), col_lower.end(), col_lower.begin(), ::tolower);
+                            if (col_lower == t_col)
+                            {
+                                idx = c;
+                                break;
+                            }
                         }
-                    }
-
-                    if (target_col_idx == -1)
-                    {
-                        cerr << "Error: Column '" << target_column << "' not found in table schema." << endl;
-                        break;
+                        target_col_indices.push_back(idx); // Will contain -1 if not found
                     }
                 }
 
                 streamoff data_page_offset = (target_root_page - 1) * (streamoff)page_size;
-
                 database_file.seekg(data_page_offset + 3);
                 char leaf_cnt_buf[2];
                 database_file.read(leaf_cnt_buf, 2);
@@ -372,14 +357,11 @@ int main(int argc, char *argv[])
                         current_pos = database_file.tellg();
                     }
 
-                    if (target_col_idx >= (int)serial_types.size())
-                    {
-                        continue;
-                    }
-
                     database_file.seekg(payload_start + (streamoff)header_sz);
 
-                    for (int col = 0; col < target_col_idx; col++)
+                    // Read sequential record data values into memory structure
+                    vector<string> row_values(serial_types.size(), "");
+                    for (size_t col = 0; col < serial_types.size(); col++)
                     {
                         int64_t stype = serial_types[col];
                         int data_len = 0;
@@ -392,20 +374,41 @@ int main(int argc, char *argv[])
                         else if (stype == 4)
                             data_len = 4;
 
-                        database_file.seekg(data_len, ios::cur);
+                        if (data_len > 0)
+                        {
+                            if (stype >= 13 and stype % 2 != 0)
+                            {
+                                char *col_val = new char[data_len + 1];
+                                database_file.read(col_val, data_len);
+                                col_val[data_len] = '\0';
+                                row_values[col] = string(col_val);
+                                delete[] col_val;
+                            }
+                            else
+                            {
+                                // For basic integers (like ID types), quickly skip or handle
+                                database_file.seekg(data_len, ios::cur);
+                                row_values[col] = "[IntData]";
+                            }
+                        }
                     }
 
-                    int64_t target_stype = serial_types[target_col_idx];
-                    if (target_stype >= 13 and target_stype % 2 != 0)
+                    // Print requested target columns separated by '|'
+                    string output_line = "";
+                    for (size_t k = 0; k < target_col_indices.size(); k++)
                     {
-                        int string_len = (target_stype - 13) / 2;
-                        char *col_val = new char[string_len + 1];
-                        database_file.read(col_val, string_len);
-                        col_val[string_len] = '\0';
-
-                        cout << col_val << endl;
-                        delete[] col_val;
+                        int mapped_idx = target_col_indices[k];
+                        if (mapped_idx != -1 && mapped_idx < (int)row_values.size())
+                        {
+                            output_line += row_values[mapped_idx];
+                        }
+                        if (k < target_col_indices.size() - 1)
+                        {
+                            output_line += " ";
+                        }
+                        cout << "\n";
                     }
+                    cout << output_line << endl;
                 }
 
                 if (is_count_query)
