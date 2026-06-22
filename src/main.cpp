@@ -493,14 +493,11 @@ int main(int argc, char *argv[])
                                     row_values[col] = "[IntData]";
                                 }
                             }
-
-                            // --- THE MAGIC FIX FOR ID ---
                             if (col < table_columns.size())
                             {
                                 string current_col_name = table_columns[col];
                                 transform(current_col_name.begin(), current_col_name.end(), current_col_name.begin(), ::tolower);
 
-                                // Check if this is the ID column and SQLite put a NULL/0 byte value here
                                 if (current_col_name == "id" && stype == 0)
                                 {
                                     row_values[col] = to_string(row_id);
