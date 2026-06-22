@@ -68,6 +68,78 @@ string trim(const string &str)
     return str.substr(first, (last - first + 1));
 }
 
+// --- NEW MAGIC: RECURSIVE B-TREE TRAVERSAL ---
+// Give this function a page number, and it will dig down to the bottom of the
+// tree and return a list of all the pages that ACTUALLY contain data.
+vector<int> get_leaf_pages(ifstream &db, int page_num, int page_size)
+{
+    vector<int> leaves;
+    streamoff offset = (page_num - 1) * (streamoff)page_size;
+
+    // Check what kind of page we are standing on
+    db.seekg(offset);
+    char type_flag;
+    db.read(&type_flag, 1);
+
+    if (type_flag == 0x0D)
+    {
+        // BASE CASE: It's a leaf page! We hit the jackpot.
+        // Just return this page number, no need to dig deeper.
+        leaves.push_back(page_num);
+    }
+    else if (type_flag == 0x05)
+    {
+        // RECURSIVE CASE: It's an interior directory page.
+        db.seekg(offset + 3);
+        char cnt_buf[2];
+        db.read(cnt_buf, 2);
+        unsigned short cell_cnt = (static_cast<unsigned char>(cnt_buf[1]) | (static_cast<unsigned char>(cnt_buf[0]) << 8));
+
+        // Grab the Right-Most Pointer from the header
+        db.seekg(offset + 8);
+        char right_buf[4];
+        db.read(right_buf, 4);
+        int right_page = (static_cast<unsigned char>(right_buf[3]) |
+                          (static_cast<unsigned char>(right_buf[2]) << 8) |
+                          (static_cast<unsigned char>(right_buf[1]) << 16) |
+                          (static_cast<unsigned char>(right_buf[0]) << 24));
+
+        // Read the cell pointers
+        db.seekg(offset + 12); // Notice interior headers are 12 bytes, not 8!
+        vector<unsigned short> cellpos(cell_cnt);
+        for (int i = 0; i < cell_cnt; i++)
+        {
+            char ptr[2];
+            db.read(ptr, 2);
+            cellpos[i] = (static_cast<unsigned char>(ptr[1]) | (static_cast<unsigned char>(ptr[0]) << 8));
+        }
+
+        // Loop through all cells to find the Left Pointers
+        for (int i = 0; i < cell_cnt; i++)
+        {
+            db.seekg(offset + cellpos[i]);
+
+            // In an interior cell, the first 4 bytes are the pointer to the left child page
+            char left_buf[4];
+            db.read(left_buf, 4);
+            int left_page = (static_cast<unsigned char>(left_buf[3]) |
+                             (static_cast<unsigned char>(left_buf[2]) << 8) |
+                             (static_cast<unsigned char>(left_buf[1]) << 16) |
+                             (static_cast<unsigned char>(left_buf[0]) << 24));
+
+            // Recursively dig into the left page and merge its results
+            vector<int> child_leaves = get_leaf_pages(db, left_page, page_size);
+            leaves.insert(leaves.end(), child_leaves.begin(), child_leaves.end());
+        }
+
+        // Finally, dig into the right-most page and merge its results
+        vector<int> right_leaves = get_leaf_pages(db, right_page, page_size);
+        leaves.insert(leaves.end(), right_leaves.begin(), right_leaves.end());
+    }
+
+    return leaves;
+}
+
 int main(int argc, char *argv[])
 {
     cout << unitbuf;
@@ -150,7 +222,7 @@ int main(int argc, char *argv[])
     }
     else
     {
-        // parse query string to find table, where clause etc
+        // parse query string
         string target_table = "";
         string where_col = "";
         string where_val = "";
@@ -169,7 +241,6 @@ int main(int argc, char *argv[])
                 target_table = trim(command.substr(from_pos + 6, where_pos - (from_pos + 6)));
                 has_where = true;
 
-                // extract condition eg id = 5
                 string condition = trim(command.substr(where_pos + 7));
                 size_t eq_pos = condition.find('=');
                 if (eq_pos != string::npos)
@@ -177,7 +248,6 @@ int main(int argc, char *argv[])
                     where_col = trim(condition.substr(0, eq_pos));
                     where_val = trim(condition.substr(eq_pos + 1));
 
-                    // strip single quotes if they exist around the value
                     if (where_val.length() >= 2 && where_val.front() == '\'' && where_val.back() == '\'')
                     {
                         where_val = where_val.substr(1, where_val.length() - 2);
@@ -191,14 +261,13 @@ int main(int argc, char *argv[])
         }
         else
         {
-            // fallback for simple table names
             target_table = command;
             size_t last_space = target_table.find_last_of(" ");
             if (last_space != string::npos)
                 target_table = target_table.substr(last_space + 1);
         }
 
-        // read schemas from page 1 to find root page
+        // read page 1 to find root page
         database_file.seekg(103);
         char cntcells[2];
         database_file.read(cntcells, 2);
@@ -243,7 +312,7 @@ int main(int argc, char *argv[])
             string current_table_name(table_name);
             delete[] table_name;
 
-            // found our table schema
+            // Found our table schema!
             if (current_table_name == target_table)
             {
                 database_file.seekg(tbl_name_len, ios::cur);
@@ -273,14 +342,12 @@ int main(int argc, char *argv[])
                 int root_len = (rootpage_serial <= 4) ? rootpage_serial : 0;
                 database_file.seekg(root_len, ios::cur);
 
-                // grab create table query and parse columns
                 int sql_len = (sql_serial >= 13 and sql_serial % 2) ? (sql_serial - 13) / 2 : 0;
                 string sql_text(sql_len, ' ');
                 database_file.read(&sql_text[0], sql_len);
 
                 vector<string> table_columns = parse_columns_from_sql(sql_text);
 
-                // get columns from select string
                 vector<string> target_columns;
                 bool is_count_query = false;
 
@@ -308,7 +375,6 @@ int main(int argc, char *argv[])
                     }
                 }
 
-                // map target columns to their array index
                 vector<int> target_col_indices;
                 if (!is_count_query)
                 {
@@ -329,7 +395,6 @@ int main(int argc, char *argv[])
                     }
                 }
 
-                // map where column to its index
                 int where_col_idx = -1;
                 if (has_where)
                 {
@@ -347,121 +412,125 @@ int main(int argc, char *argv[])
                     }
                 }
 
-                // jump to the data page
-                streamoff data_page_offset = (target_root_page - 1) * (streamoff)page_size;
-                database_file.seekg(data_page_offset + 3);
-                char leaf_cnt_buf[2];
-                database_file.read(leaf_cnt_buf, 2);
-                unsigned short data_cell_cnt = (static_cast<unsigned char>(leaf_cnt_buf[1]) | (static_cast<unsigned char>(leaf_cnt_buf[0]) << 8));
-
-                database_file.seekg(data_page_offset + 8);
-                vector<unsigned short> data_cellpos(data_cell_cnt);
-                for (int j = 0; j < data_cell_cnt; j++)
-                {
-                    char ptr[2];
-                    database_file.read(ptr, 2);
-                    data_cellpos[j] = (static_cast<unsigned char>(ptr[1]) | (static_cast<unsigned char>(ptr[0]) << 8));
-                }
-
                 int64_t total_rows_counted = 0;
 
-                // loop through all rows in this page
-                for (int j = 0; j < data_cell_cnt; j++)
+                // --- NEW LOGIC: Ask our recursion map for all the leaf pages ---
+                vector<int> all_leaf_pages = get_leaf_pages(database_file, target_root_page, page_size);
+
+                // Now loop through every single leaf page we found
+                for (int current_leaf_page : all_leaf_pages)
                 {
-                    database_file.seekg(data_page_offset + data_cellpos[j]);
 
-                    int64_t payload_size = 0, row_id = 0;
-                    read_varint(database_file, payload_size);
-                    read_varint(database_file, row_id);
+                    streamoff data_page_offset = (current_leaf_page - 1) * (streamoff)page_size;
 
-                    streampos payload_start = database_file.tellg();
-                    int64_t header_sz = 0;
-                    read_varint(database_file, header_sz);
+                    database_file.seekg(data_page_offset + 3);
+                    char leaf_cnt_buf[2];
+                    database_file.read(leaf_cnt_buf, 2);
+                    unsigned short data_cell_cnt = (static_cast<unsigned char>(leaf_cnt_buf[1]) | (static_cast<unsigned char>(leaf_cnt_buf[0]) << 8));
 
-                    vector<int64_t> serial_types;
-                    streampos current_pos = database_file.tellg();
-
-                    while (current_pos < payload_start + (streamoff)header_sz)
+                    database_file.seekg(data_page_offset + 8);
+                    vector<unsigned short> data_cellpos(data_cell_cnt);
+                    for (int j = 0; j < data_cell_cnt; j++)
                     {
-                        int64_t stype = 0;
-                        read_varint(database_file, stype);
-                        serial_types.push_back(stype);
-                        current_pos = database_file.tellg();
+                        char ptr[2];
+                        database_file.read(ptr, 2);
+                        data_cellpos[j] = (static_cast<unsigned char>(ptr[1]) | (static_cast<unsigned char>(ptr[0]) << 8));
                     }
 
-                    database_file.seekg(payload_start + (streamoff)header_sz);
-
-                    // read row data into memory
-                    vector<string> row_values(serial_types.size(), "");
-                    for (size_t col = 0; col < serial_types.size(); col++)
+                    // Scan the cells inside this specific leaf page
+                    for (int j = 0; j < data_cell_cnt; j++)
                     {
-                        int64_t stype = serial_types[col];
-                        int data_len = 0;
-                        if (stype >= 13 and stype % 2 != 0)
-                            data_len = (stype - 13) / 2;
-                        else if (stype == 1)
-                            data_len = 1;
-                        else if (stype == 2)
-                            data_len = 2;
-                        else if (stype == 4)
-                            data_len = 4;
+                        database_file.seekg(data_page_offset + data_cellpos[j]);
 
-                        if (data_len > 0)
+                        int64_t payload_size = 0, row_id = 0;
+                        read_varint(database_file, payload_size);
+                        read_varint(database_file, row_id);
+
+                        streampos payload_start = database_file.tellg();
+                        int64_t header_sz = 0;
+                        read_varint(database_file, header_sz);
+
+                        vector<int64_t> serial_types;
+                        streampos current_pos = database_file.tellg();
+
+                        while (current_pos < payload_start + (streamoff)header_sz)
                         {
+                            int64_t stype = 0;
+                            read_varint(database_file, stype);
+                            serial_types.push_back(stype);
+                            current_pos = database_file.tellg();
+                        }
+
+                        database_file.seekg(payload_start + (streamoff)header_sz);
+
+                        vector<string> row_values(serial_types.size(), "");
+                        for (size_t col = 0; col < serial_types.size(); col++)
+                        {
+                            int64_t stype = serial_types[col];
+                            int data_len = 0;
                             if (stype >= 13 and stype % 2 != 0)
+                                data_len = (stype - 13) / 2;
+                            else if (stype == 1)
+                                data_len = 1;
+                            else if (stype == 2)
+                                data_len = 2;
+                            else if (stype == 4)
+                                data_len = 4;
+
+                            if (data_len > 0)
                             {
-                                char *col_val = new char[data_len + 1];
-                                database_file.read(col_val, data_len);
-                                col_val[data_len] = '\0';
-                                row_values[col] = string(col_val);
-                                delete[] col_val;
-                            }
-                            else
-                            {
-                                // quick skip for ints we don't handle yet
-                                database_file.seekg(data_len, ios::cur);
-                                row_values[col] = "[IntData]";
+                                if (stype >= 13 and stype % 2 != 0)
+                                {
+                                    char *col_val = new char[data_len + 1];
+                                    database_file.read(col_val, data_len);
+                                    col_val[data_len] = '\0';
+                                    row_values[col] = string(col_val);
+                                    delete[] col_val;
+                                }
+                                else
+                                {
+                                    database_file.seekg(data_len, ios::cur);
+                                    row_values[col] = "[IntData]";
+                                }
                             }
                         }
-                    }
 
-                    // filter check: if it has a where clause and doesnt match, skip it
-                    if (has_where && where_col_idx != -1)
-                    {
-                        if (row_values[where_col_idx] != where_val)
+                        if (has_where && where_col_idx != -1)
                         {
+                            if (row_values[where_col_idx] != where_val)
+                            {
+                                continue;
+                            }
+                        }
+
+                        if (is_count_query)
+                        {
+                            total_rows_counted++;
                             continue;
                         }
-                    }
 
-                    if (is_count_query)
-                    {
-                        total_rows_counted++;
-                        continue;
-                    }
-
-                    // print target columns split by pipe
-                    string output_line = "";
-                    for (size_t k = 0; k < target_col_indices.size(); k++)
-                    {
-                        int mapped_idx = target_col_indices[k];
-                        if (mapped_idx != -1 && mapped_idx < (int)row_values.size())
+                        string output_line = "";
+                        for (size_t k = 0; k < target_col_indices.size(); k++)
                         {
-                            output_line += row_values[mapped_idx];
+                            int mapped_idx = target_col_indices[k];
+                            if (mapped_idx != -1 && mapped_idx < (int)row_values.size())
+                            {
+                                output_line += row_values[mapped_idx];
+                            }
+                            if (k < target_col_indices.size() - 1)
+                            {
+                                output_line += "|";
+                            }
                         }
-                        if (k < target_col_indices.size() - 1)
-                        {
-                            output_line += "|";
-                        }
+                        cout << output_line << endl;
                     }
-                    cout << output_line << endl;
-                }
+                } // End of the leaf page loop
 
                 if (is_count_query)
                 {
                     cout << total_rows_counted << endl;
                 }
-                break;
+                break; // Break from the schema search loop
             }
         }
     }
