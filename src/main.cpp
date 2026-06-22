@@ -404,9 +404,9 @@ int main(int argc, char *argv[])
                         }
                         if (k < target_col_indices.size() - 1)
                         {
-                            output_line += " ";
+                            output_line += "|";
                         }
-                        cout << "\n";
+                        // cout << "\n";
                     }
                     cout << output_line << endl;
                 }
