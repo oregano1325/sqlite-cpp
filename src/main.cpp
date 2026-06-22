@@ -8,6 +8,7 @@
 
 using namespace std;
 
+// read variable length integers
 int read_varint(ifstream &database_file, int64_t &value)
 {
     value = 0;
@@ -29,10 +30,10 @@ int read_varint(ifstream &database_file, int64_t &value)
     return bytes_read;
 }
 
+// grab column names from the create table string
 vector<string> parse_columns_from_sql(const string &sql_statement)
 {
     vector<string> column_names;
-
     size_t start = sql_statement.find('(');
     size_t end = sql_statement.find_last_of(')');
     if (start == string::npos or end == string::npos)
@@ -46,24 +47,18 @@ vector<string> parse_columns_from_sql(const string &sql_statement)
     {
         size_t first_non_space = column_def.find_first_not_of(" \t\n\r");
         if (first_non_space != string::npos)
-        {
             column_def = column_def.substr(first_non_space);
-        }
 
         size_t space_pos = column_def.find_first_of(" \t");
         if (space_pos != string::npos)
-        {
             column_names.push_back(column_def.substr(0, space_pos));
-        }
         else if (!column_def.empty())
-        {
             column_names.push_back(column_def);
-        }
     }
     return column_names;
 }
 
-// Helper tool to trim spaces
+// helper to strip whitespace
 string trim(const string &str)
 {
     size_t first = str.find_first_not_of(" \t\n\r");
@@ -94,6 +89,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    // grab page size
     database_file.seekg(16);
     char buffer[2];
     database_file.read(buffer, 2);
@@ -127,19 +123,14 @@ int main(int argc, char *argv[])
         for (int i = 0; i < cell_cnt; i++)
         {
             database_file.seekg(cellpos[i]);
-
-            int64_t payload_size = 0;
-            int64_t row_id = 0;
-
+            int64_t payload_size = 0, row_id = 0, sz = 0;
             read_varint(database_file, payload_size);
             read_varint(database_file, row_id);
 
             streampos st = database_file.tellg();
-            int64_t sz = 0;
             read_varint(database_file, sz);
 
-            int64_t type = 0;
-            int64_t name = 0;
+            int64_t type = 0, name = 0;
             read_varint(database_file, type);
             read_varint(database_file, name);
 
@@ -159,14 +150,55 @@ int main(int argc, char *argv[])
     }
     else
     {
-        // Parse table name out of command
+        // parse query string to find table, where clause etc
         string target_table = "";
-        size_t last_space = command.find_last_of(" ");
-        if (last_space != string::npos)
-            target_table = command.substr(last_space + 1);
-        else
-            target_table = command;
+        string where_col = "";
+        string where_val = "";
+        bool has_where = false;
 
+        string cmd_lower = command;
+        transform(cmd_lower.begin(), cmd_lower.end(), cmd_lower.begin(), ::tolower);
+
+        size_t from_pos = cmd_lower.find(" from ");
+        size_t where_pos = cmd_lower.find(" where ");
+
+        if (from_pos != string::npos)
+        {
+            if (where_pos != string::npos)
+            {
+                target_table = trim(command.substr(from_pos + 6, where_pos - (from_pos + 6)));
+                has_where = true;
+
+                // extract condition eg id = 5
+                string condition = trim(command.substr(where_pos + 7));
+                size_t eq_pos = condition.find('=');
+                if (eq_pos != string::npos)
+                {
+                    where_col = trim(condition.substr(0, eq_pos));
+                    where_val = trim(condition.substr(eq_pos + 1));
+
+                    // strip single quotes if they exist around the value
+                    if (where_val.length() >= 2 && where_val.front() == '\'' && where_val.back() == '\'')
+                    {
+                        where_val = where_val.substr(1, where_val.length() - 2);
+                    }
+                }
+            }
+            else
+            {
+                target_table = trim(command.substr(from_pos + 6));
+            }
+        }
+        else
+        {
+            // fallback for simple table names
+            target_table = command;
+            size_t last_space = target_table.find_last_of(" ");
+            if (last_space != string::npos)
+                target_table = target_table.substr(last_space + 1);
+        }
+
+        // read schemas from page 1 to find root page
         database_file.seekg(103);
         char cntcells[2];
         database_file.read(cntcells, 2);
@@ -184,23 +216,14 @@ int main(int argc, char *argv[])
         for (int i = 0; i < cell_cnt; i++)
         {
             database_file.seekg(cellpos[i]);
-
-            int64_t payload_size = 0;
-            int64_t row_id = 0;
-
+            int64_t payload_size = 0, row_id = 0, sz = 0;
             read_varint(database_file, payload_size);
             read_varint(database_file, row_id);
 
             streampos st = database_file.tellg();
-            int64_t sz = 0;
             read_varint(database_file, sz);
 
-            int64_t type_serial = 0;
-            int64_t name_serial = 0;
-            int64_t tbl_name_serial = 0;
-            int64_t rootpage_serial = 0;
-            int64_t sql_serial = 0;
-
+            int64_t type_serial = 0, name_serial = 0, tbl_name_serial = 0, rootpage_serial = 0, sql_serial = 0;
             read_varint(database_file, type_serial);
             read_varint(database_file, name_serial);
             read_varint(database_file, tbl_name_serial);
@@ -220,13 +243,14 @@ int main(int argc, char *argv[])
             string current_table_name(table_name);
             delete[] table_name;
 
+            // found our table schema
             if (current_table_name == target_table)
             {
                 database_file.seekg(tbl_name_len, ios::cur);
                 int64_t target_root_page = 0;
 
                 if (rootpage_serial == 0)
-                    rootpage_serial = 0;
+                    target_root_page = 0;
                 else if (rootpage_serial == 1)
                     target_root_page = (signed char)database_file.get();
                 else if (rootpage_serial == 2)
@@ -239,10 +263,8 @@ int main(int argc, char *argv[])
                 {
                     char buf[4];
                     database_file.read(buf, 4);
-                    target_root_page = (static_cast<unsigned char>(buf[3]) |
-                                        (static_cast<unsigned char>(buf[2]) << 8) |
-                                        (static_cast<unsigned char>(buf[1]) << 16) |
-                                        (static_cast<unsigned char>(buf[0]) << 24));
+                    target_root_page = (static_cast<unsigned char>(buf[3]) | (static_cast<unsigned char>(buf[2]) << 8) |
+                                        (static_cast<unsigned char>(buf[1]) << 16) | (static_cast<unsigned char>(buf[0]) << 24));
                 }
 
                 database_file.seekg(st + (streamoff)sz);
@@ -251,23 +273,20 @@ int main(int argc, char *argv[])
                 int root_len = (rootpage_serial <= 4) ? rootpage_serial : 0;
                 database_file.seekg(root_len, ios::cur);
 
+                // grab create table query and parse columns
                 int sql_len = (sql_serial >= 13 and sql_serial % 2) ? (sql_serial - 13) / 2 : 0;
                 string sql_text(sql_len, ' ');
                 database_file.read(&sql_text[0], sql_len);
 
                 vector<string> table_columns = parse_columns_from_sql(sql_text);
 
-                // Parse out multiple columns from SELECT statement
+                // get columns from select string
                 vector<string> target_columns;
                 bool is_count_query = false;
 
-                if (command.rfind("SELECT ", 0) == 0 || command.rfind("select ", 0) == 0)
+                if (cmd_lower.find("select ") == 0)
                 {
-                    size_t select_pos = 7; // Length of "SELECT "
-                    size_t from_pos = command.find(" FROM");
-                    if (from_pos == string::npos)
-                        from_pos = command.find(" from");
-
+                    size_t select_pos = 7;
                     if (from_pos != string::npos)
                     {
                         string col_part = command.substr(select_pos, from_pos - select_pos);
@@ -289,7 +308,7 @@ int main(int argc, char *argv[])
                     }
                 }
 
-                // Map requested columns to schema indexes
+                // map target columns to their array index
                 vector<int> target_col_indices;
                 if (!is_count_query)
                 {
@@ -306,10 +325,29 @@ int main(int argc, char *argv[])
                                 break;
                             }
                         }
-                        target_col_indices.push_back(idx); // Will contain -1 if not found
+                        target_col_indices.push_back(idx);
                     }
                 }
 
+                // map where column to its index
+                int where_col_idx = -1;
+                if (has_where)
+                {
+                    string lower_where_col = where_col;
+                    transform(lower_where_col.begin(), lower_where_col.end(), lower_where_col.begin(), ::tolower);
+                    for (size_t c = 0; c < table_columns.size(); c++)
+                    {
+                        string col_lower = table_columns[c];
+                        transform(col_lower.begin(), col_lower.end(), col_lower.begin(), ::tolower);
+                        if (col_lower == lower_where_col)
+                        {
+                            where_col_idx = c;
+                            break;
+                        }
+                    }
+                }
+
+                // jump to the data page
                 streamoff data_page_offset = (target_root_page - 1) * (streamoff)page_size;
                 database_file.seekg(data_page_offset + 3);
                 char leaf_cnt_buf[2];
@@ -318,29 +356,23 @@ int main(int argc, char *argv[])
 
                 database_file.seekg(data_page_offset + 8);
                 vector<unsigned short> data_cellpos(data_cell_cnt);
-                for (int i = 0; i < data_cell_cnt; i++)
+                for (int j = 0; j < data_cell_cnt; j++)
                 {
                     char ptr[2];
                     database_file.read(ptr, 2);
-                    data_cellpos[i] = (static_cast<unsigned char>(ptr[1]) | (static_cast<unsigned char>(ptr[0]) << 8));
+                    data_cellpos[j] = (static_cast<unsigned char>(ptr[1]) | (static_cast<unsigned char>(ptr[0]) << 8));
                 }
 
                 int64_t total_rows_counted = 0;
 
-                for (int i = 0; i < data_cell_cnt; i++)
+                // loop through all rows in this page
+                for (int j = 0; j < data_cell_cnt; j++)
                 {
-                    database_file.seekg(data_page_offset + data_cellpos[i]);
+                    database_file.seekg(data_page_offset + data_cellpos[j]);
 
-                    int64_t payload_size = 0;
-                    int64_t row_id = 0;
+                    int64_t payload_size = 0, row_id = 0;
                     read_varint(database_file, payload_size);
                     read_varint(database_file, row_id);
-
-                    if (is_count_query)
-                    {
-                        total_rows_counted++;
-                        continue;
-                    }
 
                     streampos payload_start = database_file.tellg();
                     int64_t header_sz = 0;
@@ -359,7 +391,7 @@ int main(int argc, char *argv[])
 
                     database_file.seekg(payload_start + (streamoff)header_sz);
 
-                    // Read sequential record data values into memory structure
+                    // read row data into memory
                     vector<string> row_values(serial_types.size(), "");
                     for (size_t col = 0; col < serial_types.size(); col++)
                     {
@@ -386,14 +418,29 @@ int main(int argc, char *argv[])
                             }
                             else
                             {
-                                // For basic integers (like ID types), quickly skip or handle
+                                // quick skip for ints we don't handle yet
                                 database_file.seekg(data_len, ios::cur);
                                 row_values[col] = "[IntData]";
                             }
                         }
                     }
 
-                    // Print requested target columns separated by '|'
+                    // filter check: if it has a where clause and doesnt match, skip it
+                    if (has_where && where_col_idx != -1)
+                    {
+                        if (row_values[where_col_idx] != where_val)
+                        {
+                            continue;
+                        }
+                    }
+
+                    if (is_count_query)
+                    {
+                        total_rows_counted++;
+                        continue;
+                    }
+
+                    // print target columns split by pipe
                     string output_line = "";
                     for (size_t k = 0; k < target_col_indices.size(); k++)
                     {
@@ -406,7 +453,6 @@ int main(int argc, char *argv[])
                         {
                             output_line += "|";
                         }
-                        // cout << "\n";
                     }
                     cout << output_line << endl;
                 }
