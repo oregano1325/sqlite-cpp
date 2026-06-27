@@ -1,76 +1,54 @@
-[![progress-banner](https://backend.codecrafters.io/progress/sqlite/98aac2be-ee51-4e99-8fbb-319bda5ba4d4)](https://app.codecrafters.io/users/oregano1325?r=2qF)
+# Build Your Own SQLite (C++)
 
-This is a starting point for C++ solutions to the
-["Build Your Own SQLite" Challenge](https://codecrafters.io/challenges/sqlite).
+![progress-banner](https://backend.codecrafters.io/progress/sqlite/98aac2be-ee51-4e99-8fbb-319bda5ba4d4)
 
-In this challenge, you'll build a barebones SQLite implementation that supports
-basic SQL queries like `SELECT`. Along the way we'll learn about
-[SQLite's file format](https://www.sqlite.org/fileformat.html), how indexed data
-is
-[stored in B-trees](https://jvns.ca/blog/2014/10/02/how-does-sqlite-work-part-2-btrees/)
-and more.
+A custom SQLite database engine built from scratch in **C++** as part of the **CodeCrafters "Build Your Own SQLite" Challenge**.
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
+This project focuses on understanding how relational databases work internally by implementing core SQLite features without using any external database libraries.
 
-# Passing the first stage
+## Project Overview
 
-The entry point for your SQLite implementation is in `src/main.cpp`. Study and
-uncomment the relevant code, and then run the command below to execute the tests
-on our servers:
+Built a lightweight SQLite clone capable of reading real `.db` files and executing basic SQL queries such as `SELECT`.
 
-```sh
-codecrafters submit
-```
+The implementation covers:
 
-Time to move on to the next stage!
+- Parsing SQLite database file headers and page structures
+- Decoding SQLite binary records using Varints and Record Headers
+- Reading and interpreting SQLite schema information
+- Implementing recursive B-Tree traversal for table and index structures
+- Executing SQL queries directly on raw database files
+- Supporting table scans and index-based lookups
 
-# Stage 2 & beyond
+## Technologies Used
 
-Note: This section is for stages 2 and beyond.
+- **Language:** C++
+- **Concepts:** Database Internals, Binary Parsing, B-Trees, File Formats, SQL Execution
+- **Platform:** CodeCrafters
 
-1. Ensure you have `cmake` installed locally
-1. Run `./your_program.sh` to run your program, which is implemented in
-   `src/main.cpp`.
-1. Run `codecrafters submit` to submit your solution to CodeCrafters. Test
-   output will be streamed to your terminal.
+## How It Works
 
-# Sample Databases
+The program directly reads SQLite database files, processes their binary format, extracts table metadata, and retrieves records by traversing the underlying B-Tree storage structure.
 
-To make it easy to test queries locally, we've added a sample database in the
-root of this repository: `sample.db`.
+It recreates the fundamental operations performed by a database engine:
+- Storage layer parsing
+- Index traversal
+- Record decoding
+- Query execution
 
-This contains two tables: `apples` & `oranges`. You can use this to test your
-implementation for the first 6 stages.
+## Learning Outcomes
 
-You can explore this database by running queries against it like this:
+Through this project, I gained hands-on experience with:
 
-```sh
-$ sqlite3 sample.db "select id, name from apples"
-1|Granny Smith
-2|Fuji
-3|Honeycrisp
-4|Golden Delicious
-```
+- How SQLite stores data internally
+- Binary file parsing and serialization
+- Database indexing mechanisms
+- B-Tree based data retrieval
+- Building a database engine from low-level components
 
-There are two other databases that you can use:
+## Running the Project
 
-1. `superheroes.db`:
-   - This is a small version of the test database used in the table-scan stage.
-   - It contains one table: `superheroes`.
-   - It is ~1MB in size.
-1. `companies.db`:
-   - This is a small version of the test database used in the index-scan stage.
-   - It contains one table: `companies`, and one index: `idx_companies_country`
-   - It is ~7MB in size.
+Clone the repository:
 
-These aren't included in the repository because they're large in size. You can
-download them by running this script:
-
-```sh
-./download_sample_databases.sh
-```
-
-If the script doesn't work for some reason, you can download the databases
-directly from
-[codecrafters-io/sample-sqlite-databases](https://github.com/codecrafters-io/sample-sqlite-databases).
+```bash
+git clone <repository-url>
+cd <repository-name>
